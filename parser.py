@@ -75,10 +75,17 @@ async def get_london_matches():
                 # Если какая-то строка текста оказалась левой и вызвала ошибку — просто пропускаем её
                 continue
 
+
+
+    # ... (весь верхний код parser.py остается таким же) ...
+
     # 4. Формируем красивый итоговый текст
-    today_formatted = f"{day_str} {month_str}"
-    if matches_today:
-        return f"📅 *Расписание матчей на сегодня ({today_formatted}):*\n\n" + "\n".join(matches_today)
-    else:
-        return f"📅 Сегодня (*{today_formatted}*) матчей ЧМ-2026 не найдено."
+    try:
+        today_formatted = f"{day_str} {month_str}"
+        if matches_today:
+            return f"📅 *Расписание матчей на сегодня ({today_formatted}):*\n\n" + "\n".join(matches_today)
+        else:
+            return f"📅 Сегодня (*{today_formatted}*) матчей ЧМ-2026 в расписании сайта не найдено."
+    except Exception as e:
+        return f"❌ Произошла ошибка при сборке текста: {e}"
         
