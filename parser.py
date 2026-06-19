@@ -12,12 +12,13 @@ MONTHS_RU = {
 }
 
 async def get_london_matches():
-    # 1. Определяем текущую дату в Великобритании (GMT+1)
+    # 1. Определяем текущую дату и время в Великобритании (GMT+1)
     uk_tz = pytz.timezone('Europe/London')
     now_uk = datetime.now(uk_tz)
     
-    # Форматируем строку для поиска на сайте, например: "19 июня"
-    today_str = f"{now_uk.day} {MONTHS_RU[now_uk.month]}"
+    # Нам нужны день (число) и название месяца в нижнем регистре
+    day_str = str(now_uk.day)
+    month_str = MONTHS_RU[now_uk.month]
     
     # 2. Асинхронно скачиваем страницу
     async with aiohttp.ClientSession() as session:
@@ -37,35 +38,47 @@ async def get_london_matches():
     # Перебираем строки текста на странице
     for line in page_text.split('\n'):
         line = line.strip()
+        line_lower = line.lower()
         
-        # Нам нужны строки, начинающиеся с сегодняшней даты и содержащие знак матча "–" или "-"
-        if line.startswith(today_str) and ("–" in line or "-" in line):
+        # Ищем гибко: в строке должно быть число дня, название месяца, двоеточие во времени и знак матча
+        if day_str in line_lower and month_str in line_lower and ":" in line_lower and ("–" in line_lower or "-" in line_lower):
             try:
-                # Пример строки: "19 июня, 22:00. США – Австралия"
-                date_time_part, teams_part = line.split('.', 1)
+                # Очищаем строку от случайных двойных пробелов внутри текста
+                line = " ".join(line.split())
+                
+                # Отделяем дату (все, что до запятой) от времени и команд
+                if "," in line:
+                    _, data_part = line.split(",", 1)
+                    data_part = data_part.strip()
+                else:
+                    data_part = line
+                
+                # Разделяем время и команды по первой точке
+                # Из "22:00. США – Австралия" получаем "22:00" и "США – Австралия"
+                time_part, teams_part = data_part.split(".", 1)
+                time_ua_str = time_part.strip()
                 teams_part = teams_part.strip()
                 
-                # Забираем время ЧЧ:ММ (последние 5 символов из первой части)
-                time_ua_str = date_time_part.split(',')[-1].strip()
-                
-                # Конвертируем время: Киев (GMT+3) -> Лондон (GMT+1). Разница -2 часа.
+                # Конвертируем время из Киева (GMT+3) в Лондон (GMT+1) -> минус 2 часа
                 ua_tz = pytz.timezone('Europe/Kyiv')
-                
-                # Строим объект времени для Киева
                 parsed_time = datetime.strptime(time_ua_str, "%H:%M").time()
+                
+                # Собираем полноценную киевскую дату-время
                 dt_ua = ua_tz.localize(datetime.combine(now_uk.date(), parsed_time))
                 
-                # Переводим в часовой пояс Лондона
+                # Переводим в часовой пояс Великобритании
                 dt_uk = dt_ua.astimezone(uk_tz)
                 time_uk_str = dt_uk.strftime("%H:%M")
                 
                 matches_today.append(f"⏰ *{time_uk_str}* (UK Time) | ⚽ {teams_part}")
             except Exception:
-                continue  # Если строка кривая, просто идем дальше
+                # Если какая-то строка текста оказалась левой и вызвала ошибку — просто пропускаем её
+                continue
 
-    # 4. Формируем красивый ответ
+    # 4. Формируем красивый итоговый текст
+    today_formatted = f"{day_str} {month_str}"
     if matches_today:
-        return f"📅 *Расписание матчей на сегодня ({today_str}):*\n\n" + "\n".join(matches_today)
+        return f"📅 *Расписание матчей на сегодня ({today_formatted}):*\n\n" + "\n".join(matches_today)
     else:
-        return f"📅 Сегодня (*{today_str}*) матчей ЧМ-2026 не найдено."
-  
+        return f"📅 Сегодня (*{today_formatted}*) матчей ЧМ-2026 не найдено."
+        
