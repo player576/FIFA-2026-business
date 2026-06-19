@@ -4,3 +4,4 @@ pydantic-core==2.14.6
 aiohttp==3.9.1
 beautifulsoup4==4.12.2
 pytz==2023.3.post1
+python-dotenv==1.0.1
