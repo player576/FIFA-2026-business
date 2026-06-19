@@ -32,70 +32,72 @@ async def get_london_matches():
                 if response.status != 200:
                     return f"❌ Сайт вернул статус {response.status}"
                 html = await response.text()
-        except Exception as e:
-            return f"❌ Ошибка сети при скачивании сайта: {e}"
+        except Exception as error_net:
+            return f"❌ Ошибка сети при скачивании сайта: {error_net}"
 
     # 3. Парсим
-    soup = BeautifulSoup(html, 'html.parser')
-    page_text = soup.get_text()
-    
-    lines = page_text.split('\n')
-    debug_info.append(f"• Всего строк получено с сайта: {len(lines)}")
-    
-    matches_today = []
-    matched_lines_count = 0
-
-    # Пройдемся по строкам
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-            
-        line_lower = line.lower()
+    try:
+        soup = BeautifulSoup(html, 'html.parser')
+        page_text = soup.get_text()
         
-        # Проверяем условия поиска
-        has_day = day_str in line_lower
-        has_month = month_str in line_lower
+        lines = page_text.split('\n')
+        debug_info.append(f"• Всего строк получено с сайта: {len(lines)}")
         
-        # Запишем в логи первую попавшуюся строку с упоминанием месяца, чтобы посмотреть её структуру
-        if has_month and matched_lines_count < 2:
-            debug_info.append(f"📝 *Пример строки с месяцем:* `{line[:80]}`")
-            matched_lines_count += 1
+        matches_today = []
+        matched_lines_count = 0
 
-        if has_day and has_month and ":" in line_lower and ("–" in line_lower or "-" in line_lower):
-            try:
-                line = " ".join(line.split())
-                
-                if "," in line:
-                    _, data_part = line.split(",", 1)
-                    data_part = data_part.strip()
-                else:
-                    data_part = line
-                
-                time_part, teams_part = data_part.split(".", 1)
-                time_ua_str = time_part.strip()
-                teams_part = teams_part.strip()
-                
-                ua_tz = pytz.timezone('Europe/Kyiv')
-                parsed_time = datetime.strptime(time_ua_str, "%H:%M").time()
-                
-                dt_ua = ua_tz.localize(datetime.combine(now_uk.date(), parsed_time))
-                dt_uk = dt_ua.astimezone(uk_tz)
-                time_uk_str = dt_uk.strftime("%H:%M")
-                
-                matches_today.append(f"⏰ *{time_uk_str}* (UK Time) | ⚽ {teams_part}")
-            except Exception as e:
-                debug_info.append(f"⚠️ Ошибка обработки строки матча: {e}")
+        # Пройдемся по строкам
+        for line in lines:
+            line = line.strip()
+            if not line:
                 continue
+                
+            line_lower = line.lower()
+            
+            # Проверяем условия поиска
+            has_day = day_str in line_lower
+            has_month = month_str in line_lower
+            
+            # Запишем в логи первую попавшуюся строку с упоминанием месяца, чтобы посмотреть её структуру
+            if has_month and matched_lines_count < 2:
+                debug_info.append(f"📝 *Пример строки с месяцем:* `{line[:80]}`")
+                matched_lines_count += 1
 
-    debug_info.append(f"• Найдено валидных матчей: {len(matches_today)}\n" + "—" * 15)
+            if has_day and has_month and ":" in line_lower and ("–" in line_lower or "-" in line_lower):
+                try:
+                    line = " ".join(line.split())
+                    
+                    if "," in line:
+                        _, data_part = line.split(",", 1)
+                        data_part = data_part.strip()
+                    else:
+                        data_part = line
+                    
+                    time_part, teams_part = data_part.split(".", 1)
+                    time_ua_str = time_part.strip()
+                    teams_part = teams_part.strip()
+                    
+                    ua_tz = pytz.timezone('Europe/Kyiv')
+                    parsed_time = datetime.strptime(time_ua_str, "%H:%M").time()
+                    
+                    dt_ua = ua_tz.localize(datetime.combine(now_uk.date(), parsed_time))
+                    dt_uk = dt_ua.astimezone(uk_tz)
+                    time_uk_str = dt_uk.strftime("%H:%M")
+                    
+                    matches_today.append(f"⏰ *{time_uk_str}* (UK Time) | ⚽ {teams_part}")
+                except Exception:
+                    continue
 
-    # 4. Вывод результата вместе с логом
-    if matches_today:
-        report = f"📅 *Расписание матчей на сегодня ({today_formatted}):*\n\n" + "\n".join(matches_today)
-    else:
-        report = f"📅 Сегодня (*{today_formatted}*) матчей ЧМ-2026 в расписании сайта не найдено.{e}"
-        
-    # Склеиваем отчет и логи отладки
-    return "\n".join(debug_info) + "\n\n" + report
-        
+        debug_info.append(f"• Найдено валидных матчей: {len(matches_today)}\n" + "—" * 15)
+
+        # 4. Вывод результата вместе с логом
+        if matches_today:
+            report = f"📅 *Расписание матчей на сегодня ({today_formatted}):*\n\n" + "\n".join(matches_today)
+        else:
+            report = f"📅 Сегодня (*{today_formatted}*) матчей ЧМ-2026 в расписании сайта не найдено."
+            
+        return "\n".join(debug_info) + "\n\n" + report
+
+    except Exception as error_parse:
+        return f"❌ Произошла ошибка при сборке текста: {error_parse}"
+                    
