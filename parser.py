@@ -19,85 +19,81 @@ async def get_london_matches():
     month_str = MONTHS_RU[now_uk.month]
     today_formatted = f"{day_str} {month_str}"
     
-    debug_info = []
-    debug_info.append(f"🤖 **Лог отладки парсера:**")
-    debug_info.append(f"• Текущее время на сервере (UK): {now_uk.strftime('%Y-%m-%d %H:%M:%S')}")
-    debug_info.append(f"• Ищем в тексте совпадения для: `{day_str}` и `{month_str}`")
-
     # 2. Скачиваем страницу
     async with aiohttp.ClientSession() as session:
         try:
             async with session.get(URL, timeout=10) as response:
-                debug_info.append(f"• Статус ответа сайта: {response.status}")
                 if response.status != 200:
                     return f"❌ Сайт вернул статус {response.status}"
                 html = await response.text()
         except Exception as error_net:
             return f"❌ Ошибка сети при скачивании сайта: {error_net}"
 
-    # 3. Парсим
+    # 3. Парсим контент через элементы блоков
     try:
         soup = BeautifulSoup(html, 'html.parser')
-        page_text = soup.get_text()
         
-        lines = page_text.split('\n')
-        debug_info.append(f"• Всего строк получено с сайта: {len(lines)}")
+        # Собираем текст из параграфов, списков и заголовков, где лежит расписание
+        elements = soup.find_all(['p', 'li', 'h2', 'h3', 'div'])
         
         matches_today = []
-        matched_lines_count = 0
+        current_date_context = ""
 
-        # Пройдемся по строкам
-        for line in lines:
-            line = line.strip()
-            if not line:
+        for elem in elements:
+            text = elem.get_text().strip()
+            if not text or len(text) > 200: # Пропускаем огромные куски текста
                 continue
-                
-            line_lower = line.lower()
             
-            # Проверяем условия поиска
-            has_day = day_str in line_lower
-            has_month = month_str in line_lower
+            text_lower = text.lower()
             
-            # Запишем в логи первую попавшуюся строку с упоминанием месяца, чтобы посмотреть её структуру
-            if has_month and matched_lines_count < 2:
-                debug_info.append(f"📝 *Пример строки с месяцем:* `{line[:80]}`")
-                matched_lines_count += 1
+            # Если строка похожа на дату (например, "19 июня" или "пятница, 19 июня")
+            if month_str in text_lower and any(str(i) in text_lower for i in range(1, 32)):
+                current_date_context = text_lower
 
-            if has_day and has_month and ":" in line_lower and ("–" in line_lower or "-" in line_lower):
-                try:
-                    line = " ".join(line.split())
-                    
-                    if "," in line:
-                        _, data_part = line.split(",", 1)
-                        data_part = data_part.strip()
-                    else:
-                        data_part = line
-                    
-                    time_part, teams_part = data_part.split(".", 1)
-                    time_ua_str = time_part.strip()
-                    teams_part = teams_part.strip()
-                    
-                    ua_tz = pytz.timezone('Europe/Kyiv')
-                    parsed_time = datetime.strptime(time_ua_str, "%H:%M").time()
-                    
-                    dt_ua = ua_tz.localize(datetime.combine(now_uk.date(), parsed_time))
-                    dt_uk = dt_ua.astimezone(uk_tz)
-                    time_uk_str = dt_uk.strftime("%H:%M")
-                    
-                    matches_today.append(f"⏰ *{time_uk_str}* (UK Time) | ⚽ {teams_part}")
-                except Exception:
-                    continue
+            # Ищем строчку с матчем (должно быть время через двоеточие и знак переноса/дефиса матча)
+            if ":" in text_lower and ("–" in text_lower or "-" in text_lower or " против " in text_lower):
+                # Проверяем, относится ли этот матч к сегодняшнему дню
+                # Либо дата написана прямо в строке матча, либо в текущем заголовке над ней
+                if (day_str in text_lower and month_str in text_lower) or (day_str in current_date_context and month_str in current_date_context):
+                    try:
+                        # Чистим текст от лишних пробелов
+                        clean_text = " ".join(text.split())
+                        
+                        # Пробуем вытащить время Киев/МСК из строки для перевода в UK Time
+                        # Формат обычно: "19:00. Группа А: ..." или "22:00 Команда - Команда"
+                        time_str = ""
+                        for word in clean_text.split():
+                            if ":" in word:
+                                time_str = word.strip(".,()[]")
+                                break
+                        
+                        if time_str:
+                            ua_tz = pytz.timezone('Europe/Kyiv')
+                            parsed_time = datetime.strptime(time_str, "%H:%M").time()
+                            
+                            dt_ua = ua_tz.localize(datetime.combine(now_uk.date(), parsed_time))
+                            dt_uk = dt_ua.astimezone(uk_tz)
+                            time_uk_str = dt_uk.strftime("%H:%M")
+                            
+                            # Убираем время из текста, чтобы красиво отформатировать
+                            display_text = clean_text.replace(time_str, "").strip(" .,-—")
+                            matches_today.append(f"⏰ *{time_uk_str}* (UK Time) | ⚽ {display_text}")
+                        else:
+                            # Если точное время не распарсилось, выводим строку как есть
+                            matches_today.append(f"⚽ {clean_text}")
+                    except Exception:
+                        # Если перевод времени споткнулся, просто добавляем исходный текст
+                        matches_today.append(f"⚽ {text}")
 
-        debug_info.append(f"• Найдено валидных матчей: {len(matches_today)}\n" + "—" * 15)
+        # Удаляем дубликаты, если они собрались из разных тегов
+        matches_today = list(set(matches_today))
 
-        # 4. Вывод результата вместе с логом
+        # 4. Вывод результата
         if matches_today:
-            report = f"📅 *Расписание матчей на сегодня ({today_formatted}):*\n\n" + "\n".join(matches_today)
+            return f"📅 *Расписание матчей на сегодня ({today_formatted}):*\n\n" + "\n".join(matches_today)
         else:
-            report = f"📅 Сегодня (*{today_formatted}*) матчей ЧМ-2026 в расписании сайта не найдено."
-            
-        return "\n".join(debug_info) + "\n\n" + report
+            return f"📅 Сегодня (*{today_formatted}*) матчей ЧМ-2026 в расписании сайта не найдено.\n\n_Возможно, на сегодня нет запланированных игр или календарь обновится позже._"
 
     except Exception as error_parse:
-        return f"❌ Произошла ошибка при сборке текста: {error_parse}"
-                    
+        return f"❌ Произошла ошибка при анализе сайта: {error_parse}"
+                            
