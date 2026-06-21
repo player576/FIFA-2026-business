@@ -9,13 +9,14 @@ from aiohttp import web
 import config
 from parser import get_london_matches
 
-# Включаем логирование, чтобы в панели Render было видно статус бота
+# Включаем логирование
 logging.basicConfig(level=logging.INFO)
 
+# Инициализируем бота и диспетчер
 bot = Bot(token=config.BOT_TOKEN)
 dp = Dispatcher()
 
-# Главная клавиатура с кнопкой
+# Главная клавиатура
 def get_main_keyboard():
     builder = ReplyKeyboardBuilder()
     builder.button(text="⚽ Матчи на сегодня")
@@ -32,42 +33,39 @@ async def cmd_start(message: types.Message):
 # Хэндлер на нажатие кнопки получения матчей
 @dp.message(lambda message: message.text == "⚽ Матчи на сегодня")
 async def show_matches(message: types.Message):
-    # Отправляем временный статус, чтобы пользователь видел, что бот работает
     waiting_msg = await message.answer("🔄 Залезаю в интернет, проверяю расписание...")
-    
-    # Получаем данные из нашего парсера
     report = await get_london_matches()
-    
-    # Удаляем сообщение со статусом ожидания и присылаем результат
     await waiting_msg.delete()
     await message.answer(report, parse_mode="Markdown")
 
-# --- ХЭНДЛЕР ДЛЯ ОБМАНА RENDER ---
-# Этот эндпоинт будет отвечать пинг-сервису Render, что всё хорошо
-async def handle_ping(request):
-    return web.Response(text="Bot is alive!")
 
-# Запуск бота и веб-сервера
-async def main():
-    logging.info("Запуск фонового веб-сервера для Render...")
-    
-    # Создаем минимальное веб-приложение
+# --- ВЕБ-СЕРВЕР ДЛЯ ОБМАНА RENDER И ДЛЯ UPTIMEROBOT ---
+
+# Этот хэндлер вернет статус 200 OK для UptimeRobot, когда тот перейдет по ссылке
+async def handle_ping(request):
+    return web.Response(text="Bot is alive!", status=200)
+
+async def start_web_server():
     app = web.Application()
     app.router.add_get('/', handle_ping)
     runner = web.AppRunner(app)
     await runner.setup()
     
-    # Render автоматически передает нужный ему порт в переменную окружения PORT.
-    # Если её нет (например, при тесте на ПК), используем порт 8000.
-    port = int(os.getenv("PORT", 8000))
+    # Render автоматически передает нужный порт в переменную окружения PORT.
+    port = int(os.environ.get("PORT", 8080))
     site = web.TCPSite(runner, "0.0.0.0", port)
     
-    # Запускаем сервер в фоновом режиме асинхронно
-    asyncio.create_task(site.start())
-    logging.info(f"Временный веб-сервер успешно запущен на порту {port}")
+    await site.start()
+    logging.info(f"=== Фоновый веб-сервер успешно запущен на порту {port} ===")
 
-    # Запускаем стандартный опрос Telegram (Polling)
-    logging.info("Бот успешно запущен в режиме Polling!")
+
+# --- ГЛАВНАЯ ФУНКЦИЯ ЗАПУСКА ---
+async def main():
+    # 1. Запускаем веб-сервер в фоновом режиме асинхронно
+    asyncio.create_task(start_web_server())
+    
+    # 2. Запускаем стандартный опрос Telegram (Polling)
+    logging.info("=== Бот успешно запущен в режиме Polling! ===")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
