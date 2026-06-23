@@ -11,7 +11,6 @@ MONTHS_RU = {
 }
 
 async def get_london_matches():
-    # 1. Получаем точную текущую дату в UK
     uk_tz = pytz.timezone('Europe/London')
     now_uk = datetime.now(uk_tz)
     
@@ -19,7 +18,10 @@ async def get_london_matches():
     month_str = MONTHS_RU[now_uk.month]
     today_formatted = f"{day_str} {month_str}"
     
-    # 2. Скачиваем страницу
+    debug_info = []
+    debug_info.append(f"🤖 **Диагностика парсера:**")
+    debug_info.append(f"• Ищем дату: `{today_formatted}`")
+
     async with aiohttp.ClientSession() as session:
         try:
             async with session.get(URL, timeout=10) as response:
@@ -29,15 +31,13 @@ async def get_london_matches():
         except Exception as error_net:
             return f"❌ Ошибка сети при скачивании сайта: {error_net}"
 
-    # 3. Парсим строго по целевому дню
     try:
         soup = BeautifulSoup(html, 'html.parser')
-        
-        # Находим все текстовые элементы на странице
-        elements = soup.find_all(['p', 'li', 'h2', 'h3', 'strong'])
+        elements = soup.find_all(['p', 'li', 'h2', 'h3', 'strong', 'td'])
         
         matches_today = []
-        is_today_section = False  # Флаг: находимся ли мы внутри блока СЕГОДНЯШНЕЙ даты
+        is_today_section = False
+        found_date_header = False
 
         for elem in elements:
             text = elem.get_text().strip()
@@ -46,32 +46,31 @@ async def get_london_matches():
             
             text_lower = text.lower()
             
-            # Проверяем, не является ли эта строка заголовком ДАТЫ
-            # Строка должна содержать текущий месяц и именно текущий день отдельно (защита от "13 июня", если сегодня "3 июня")
+            # Проверяем заголовок даты
             has_month = month_str in text_lower
             words = text_lower.split()
-            has_exact_day = day_str in words or f"0{day_str}" in words or any(f"{day_str}" == w.strip(".,()-") for w in words)
+            # Более гибкая проверка на точное совпадение дня (чтобы ловить "23", "23-е", "23.06")
+            has_exact_day = any(day_str == "".join(filter(str.isdigit, w)) for w in words)
 
-            if has_month and has_exact_day and (len(text) < 40 or "матч" in text_lower or "тур" in text_lower):
-                # Мы нашли заголовок сегодняшнего дня! Включаем сбор матчей
-                is_today_section = True
-                continue
+            if has_month and has_exact_day and not found_date_header:
+                if len(text) < 60 or "матч" in text_lower or "групп" in text_lower:
+                    is_today_section = True
+                    found_date_header = True
+                    debug_info.append(f"✅ НАЙДЕН заголовок дня: `{text}`")
+                    continue
             
-            # Если мы зафиксировали начало сегодняшнего дня, но встретили ДРУГУЮ дату — выключаем сбор
-            elif is_today_section and any(m in text_lower for m in MONTHS_RU.values()) and any(str(i) in text_lower for i in range(1, 32)):
-                # Убедимся, что это реально другая дата, а не случайная строка
+            # Если мы уже в блоке сегодня, но встретили ДРУГУЮ дату — выходим
+            elif is_today_section and any(m in text_lower for m in MONTHS_RU.values()):
                 if not has_exact_day:
+                    debug_info.append(f"🛑 Вышли из блока на строке: `{text[:50]}...`")
                     is_today_section = False
-                    break # Мы вышли из блока сегодняшних матчей, дальше парсить нет смысла
+                    break
 
-            # Если мы внутри блока сегодняшней даты — собираем строчки с матчами
+            # Собираем матчи
             if is_today_section:
-                # Строка матча обязательно содержит время через ":" и разделитель команд
                 if ":" in text_lower and ("–" in text_lower or "-" in text_lower or " против " in text_lower or " - " in text_lower):
                     try:
                         clean_text = " ".join(text.split())
-                        
-                        # Извлекаем время из строки
                         time_str = ""
                         for word in clean_text.split():
                             if ":" in word:
@@ -81,26 +80,29 @@ async def get_london_matches():
                         if time_str:
                             ua_tz = pytz.timezone('Europe/Kyiv')
                             parsed_time = datetime.strptime(time_str, "%H:%M").time()
-                            
                             dt_ua = ua_tz.localize(datetime.combine(now_uk.date(), parsed_time))
                             dt_uk = dt_ua.astimezone(uk_tz)
                             time_uk_str = dt_uk.strftime("%H:%M")
                             
                             display_text = clean_text.replace(time_str, "").strip(" .,-—")
-                            matches_today.append(f"⏰ *{time_uk_str}* (UK Time) | ⚽ {display_text}")
+                            matches_today.append(f"⏰ *{time_uk_str}* | ⚽ {display_text}")
                         else:
                             matches_today.append(f"⚽ {clean_text}")
                     except Exception:
                         matches_today.append(f"⚽ {text}")
 
-        # Удаляем дубликаты строк
+        if not found_date_header:
+            debug_info.append("❌ Парсер вообще не смог найти на странице блок с сегодняшней датой!")
+
         matches_today = list(set(matches_today))
 
-        # 4. Формируем красивый и строгий ответ
+        # Собираем итоговый отчет
         if matches_today:
-            return f"📅 *Расписание матчей на сегодня ({today_formatted}):*\n\n" + "\n".join(matches_today)
+            report = f"📅 *Расписание матчей на сегодня ({today_formatted}):*\n\n" + "\n".join(matches_today)
         else:
-            return f"📅 Сегодня (*{today_formatted}*) матчей ЧМ-2026 в расписании сайта не найдено.\n\n_Отдыхаем от футбола!_"
+            report = f"📅 Сегодня (*{today_formatted}*) матчей не найдено."
+            
+        return "\n".join(debug_info) + "\n\n" + report
 
     except Exception as error_parse:
         return f"❌ Произошла ошибка при анализе сайта: {error_parse}"
