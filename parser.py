@@ -11,7 +11,7 @@ MONTHS_RU = {
 }
 
 async def get_london_matches():
-    # 1. Время в Великобритании
+    # 1. Получаем точную текущую дату в UK
     uk_tz = pytz.timezone('Europe/London')
     now_uk = datetime.now(uk_tz)
     
@@ -29,38 +29,49 @@ async def get_london_matches():
         except Exception as error_net:
             return f"❌ Ошибка сети при скачивании сайта: {error_net}"
 
-    # 3. Парсим контент через элементы блоков
+    # 3. Парсим строго по целевому дню
     try:
         soup = BeautifulSoup(html, 'html.parser')
         
-        # Собираем текст из параграфов, списков и заголовков, где лежит расписание
-        elements = soup.find_all(['p', 'li', 'h2', 'h3', 'div'])
+        # Находим все текстовые элементы на странице
+        elements = soup.find_all(['p', 'li', 'h2', 'h3', 'strong'])
         
         matches_today = []
-        current_date_context = ""
+        is_today_section = False  # Флаг: находимся ли мы внутри блока СЕГОДНЯШНЕЙ даты
 
         for elem in elements:
             text = elem.get_text().strip()
-            if not text or len(text) > 200: # Пропускаем огромные куски текста
+            if not text or len(text) > 250:
                 continue
             
             text_lower = text.lower()
             
-            # Если строка похожа на дату (например, "19 июня" или "пятница, 19 июня")
-            if month_str in text_lower and any(str(i) in text_lower for i in range(1, 32)):
-                current_date_context = text_lower
+            # Проверяем, не является ли эта строка заголовком ДАТЫ
+            # Строка должна содержать текущий месяц и именно текущий день отдельно (защита от "13 июня", если сегодня "3 июня")
+            has_month = month_str in text_lower
+            words = text_lower.split()
+            has_exact_day = day_str in words or f"0{day_str}" in words or any(f"{day_str}" == w.strip(".,()-") for w in words)
 
-            # Ищем строчку с матчем (должно быть время через двоеточие и знак переноса/дефиса матча)
-            if ":" in text_lower and ("–" in text_lower or "-" in text_lower or " против " in text_lower):
-                # Проверяем, относится ли этот матч к сегодняшнему дню
-                # Либо дата написана прямо в строке матча, либо в текущем заголовке над ней
-                if (day_str in text_lower and month_str in text_lower) or (day_str in current_date_context and month_str in current_date_context):
+            if has_month and has_exact_day and (len(text) < 40 or "матч" in text_lower or "тур" in text_lower):
+                # Мы нашли заголовок сегодняшнего дня! Включаем сбор матчей
+                is_today_section = True
+                continue
+            
+            # Если мы зафиксировали начало сегодняшнего дня, но встретили ДРУГУЮ дату — выключаем сбор
+            elif is_today_section and any(m in text_lower for m in MONTHS_RU.values()) and any(str(i) in text_lower for i in range(1, 32)):
+                # Убедимся, что это реально другая дата, а не случайная строка
+                if not has_exact_day:
+                    is_today_section = False
+                    break # Мы вышли из блока сегодняшних матчей, дальше парсить нет смысла
+
+            # Если мы внутри блока сегодняшней даты — собираем строчки с матчами
+            if is_today_section:
+                # Строка матча обязательно содержит время через ":" и разделитель команд
+                if ":" in text_lower and ("–" in text_lower or "-" in text_lower or " против " in text_lower or " - " in text_lower):
                     try:
-                        # Чистим текст от лишних пробелов
                         clean_text = " ".join(text.split())
                         
-                        # Пробуем вытащить время Киев/МСК из строки для перевода в UK Time
-                        # Формат обычно: "19:00. Группа А: ..." или "22:00 Команда - Команда"
+                        # Извлекаем время из строки
                         time_str = ""
                         for word in clean_text.split():
                             if ":" in word:
@@ -75,25 +86,22 @@ async def get_london_matches():
                             dt_uk = dt_ua.astimezone(uk_tz)
                             time_uk_str = dt_uk.strftime("%H:%M")
                             
-                            # Убираем время из текста, чтобы красиво отформатировать
                             display_text = clean_text.replace(time_str, "").strip(" .,-—")
                             matches_today.append(f"⏰ *{time_uk_str}* (UK Time) | ⚽ {display_text}")
                         else:
-                            # Если точное время не распарсилось, выводим строку как есть
                             matches_today.append(f"⚽ {clean_text}")
                     except Exception:
-                        # Если перевод времени споткнулся, просто добавляем исходный текст
                         matches_today.append(f"⚽ {text}")
 
-        # Удаляем дубликаты, если они собрались из разных тегов
+        # Удаляем дубликаты строк
         matches_today = list(set(matches_today))
 
-        # 4. Вывод результата
+        # 4. Формируем красивый и строгий ответ
         if matches_today:
             return f"📅 *Расписание матчей на сегодня ({today_formatted}):*\n\n" + "\n".join(matches_today)
         else:
-            return f"📅 Сегодня (*{today_formatted}*) матчей ЧМ-2026 в расписании сайта не найдено.\n\n_Возможно, на сегодня нет запланированных игр или календарь обновится позже._"
+            return f"📅 Сегодня (*{today_formatted}*) матчей ЧМ-2026 в расписании сайта не найдено.\n\n_Отдыхаем от футбола!_"
 
     except Exception as error_parse:
         return f"❌ Произошла ошибка при анализе сайта: {error_parse}"
-                            
+        
