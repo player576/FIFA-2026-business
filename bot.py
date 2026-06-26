@@ -41,18 +41,15 @@ async def show_matches(message: types.Message):
 
 # --- ВЕБ-СЕРВЕР ДЛЯ ОБМАНА RENDER И ДЛЯ UPTIMEROBOT ---
 
-async def main():
-    # 1. Запускаем веб-сервер в фоновом режиме асинхронно
-    asyncio.create_task(start_web_server())
-    
-    # 2. УДАЛЯЕМ КОНФЛИКТУЮЩИЕ ВЕБХУКИ (Чистим память Телеграма)
-    logging.info("Очистка старых вебхуков...")
-    await bot.delete_webhook(drop_pending_updates=True)
-    
-    # 3. Запускаем стандартный опрос Telegram (Polling)
-    logging.info("=== Бот успешно запущен в режиме Polling! ===")
-    await dp.start_polling(bot)
-    
+# Этот хэндлер вернет статус 200 OK для UptimeRobot, когда тот перейдет по ссылке
+async def handle_ping(request):
+    return web.Response(text="Bot is alive!", status=200)
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get('/', handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
     
     # Render автоматически передает нужный порт в переменную окружения PORT.
     port = int(os.environ.get("PORT", 8080))
@@ -67,10 +64,7 @@ async def main():
     # 1. Запускаем веб-сервер в фоновом режиме асинхронно
     asyncio.create_task(start_web_server())
     
-    # 2. Запускаем стандартный опрос Telegram (Polling)
-    logging.info("=== Бот успешно запущен в режиме Polling! ===")
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    # 2. УДАЛЯЕМ КОНФЛИКТУЮЩИЕ ВЕБХУКИ (Чистим память Телеграма)
+    logging.info("Очистка старых вебхуков...")
+    await bot.delete_webhook(drop_pending
     
