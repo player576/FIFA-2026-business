@@ -66,5 +66,5 @@ async def main():
     
     # 2. УДАЛЯЕМ КОНФЛИКТУЮЩИЕ ВЕБХУКИ (Чистим память Телеграма)
     logging.info("Очистка старых вебхуков...")
-    await bot.delete_webhook(drop_pending
+    await bot.delete_webhook(drop_pending)
     
