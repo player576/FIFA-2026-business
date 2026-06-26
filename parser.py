@@ -29,7 +29,6 @@ async def get_london_matches():
 
     try:
         soup = BeautifulSoup(html, 'html.parser')
-        # Берем все текстовые элементы со страницы
         elements = soup.find_all(['p', 'li', 'h2', 'h3', 'strong', 'td', 'div'])
         
         matches_today = []
@@ -42,26 +41,23 @@ async def get_london_matches():
             
             text_lower = text.lower()
             
-            # 1. Ищем начало сегодняшнего блока (например: "26 июня" или "пятница, 26 июня")
+            # 1. Ищем заголовок сегодняшнего дня
             if month_str in text_lower:
-                # Очищаем слова от знаков препинания для точной сверки числа
                 words = [w.strip(".,()-") for w in text_lower.split()]
                 if day_str in words or f"0{day_str}" in words:
-                    if len(text) < 50:  # Короткая строка — заголовок даты
+                    if len(text) < 50:  
                         is_today_section = True
                         continue
 
-            # 2. Если мы внутри сегодняшнего дня, но встретили ДРУГУЮ дату — выключаем сбор данных
+            # 2. Выключаем сбор, если пошёл другой день
             elif is_today_section and any(m in text_lower for m in MONTHS_RU.values()):
                 words = [w.strip(".,()-") for w in text_lower.split()]
-                # Если это не сегодняшнее число, значит начался блок другого дня
                 if day_str not in words and f"0{day_str}" not in words:
                     is_today_section = False
                     break 
 
-            # 3. Сбор матчей строго внутри активного сегодняшнего блока
+            # 3. Собираем игры
             if is_today_section:
-                # Строка матча обязательно содержит двоеточие времени и разделитель команд
                 if ":" in text_lower and ("–" in text_lower or "-" in text_lower or " против " in text_lower or " - " in text_lower):
                     try:
                         clean_text = " ".join(text.split())
@@ -85,7 +81,6 @@ async def get_london_matches():
                     except Exception:
                         matches_today.append(f"⚽ {text}")
 
-        # Убираем дубликаты
         matches_today = list(set(matches_today))
 
         if matches_today:
