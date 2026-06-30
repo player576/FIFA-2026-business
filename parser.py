@@ -17,6 +17,10 @@ async def get_london_matches():
     day_str = str(now_uk.day)
     month_str = MONTHS_RU[now_uk.month]
     today_formatted = f"{day_str} {month_str}"
+    
+    debug_info = []
+    debug_info.append(f"🤖 **Бот ищет матчи покоординатно!**")
+    debug_info.append(f"• Целевая дата: `{today_formatted}`")
 
     async with aiohttp.ClientSession() as session:
         try:
@@ -29,11 +33,10 @@ async def get_london_matches():
 
     try:
         soup = BeautifulSoup(html, 'html.parser')
-        # Ищем строго по тегам заголовков и абзацев, где обычно пишется дата дня
-        elements = soup.find_all(['h2', 'h3', 'p', 'strong', 'li'])
+        # Собираем текстовые элементы
+        elements = soup.find_all(['p', 'li', 'td', 'strong'])
         
         raw_matches = []
-        is_today_section = False  
 
         for elem in elements:
             text = elem.get_text().strip()
@@ -42,60 +45,92 @@ async def get_london_matches():
             
             text_lower = text.lower()
             
-            # --- ПРОВЕРКА НА ЗАГОЛОВОК ДНЯ ---
-            # Строка даты должна быть короткой и НЕ должна содержать счёт или двоеточие времени
-            if month_str in text_lower and ":" not in text_lower and "–" not in text_lower and " - " not in text_lower:
-                words = [w.strip(".,()-—") for w in text_lower.split()]
+            # Строка должна содержать двоеточие (время) и разделитель команд
+            if ":" in text_lower and ("–" in text_lower or "-" in text_lower or " против " in text_lower or " - " in text_lower):
                 
-                # Проверяем точное совпадение числа дня (например "30" или "030")
-                if day_str in words or f"0{day_str}" in words:
-                    if len(text) < 40:  # Чистый заголовок дня
-                        is_today_section = True
-                        continue
-                else:
-                    # Если нашли заголовок ДРУГОГО дня — закрываем сбор
-                    if is_today_section and len(text) < 40:
-                        is_today_section = False
-                        break 
-
-            # --- СБОР МАТЧЕЙ ---
-            if is_today_section:
-                if ":" in text_lower and ("–" in text_lower or "-" in text_lower or " против " in text_lower or " - " in text_lower):
-                    try:
-                        clean_text = " ".join(text.split())
-                        time_str = ""
-                        for word in clean_text.split():
-                            if ":" in word:
-                                time_str = word.strip(".,()[]")
-                                break
-                        
-                        if time_str:
-                            ua_tz = pytz.timezone('Europe/Kyiv')
-                            parsed_time = datetime.strptime(time_str, "%H:%M").time()
-                            dt_ua = ua_tz.localize(datetime.combine(now_uk.date(), parsed_time))
-                            dt_uk = dt_ua.astimezone(uk_tz)
-                            time_uk_str = dt_uk.strftime("%H:%M")
+                # Проверяем, относится ли эта конкретная строка к сегодняшнему дню
+                if month_str in text_lower:
+                    # Разбиваем строку на отдельные слова, чтобы проверить число дня
+                    words = [w.strip(".,()[]-—:") for w in text_lower.split()]
+                    
+                    # Защита от счета матча: число должно идти РЯДОМ со словом месяца или в начале строки,
+                    # но мы просто проверяем, есть ли day_str среди слов, И это слово не является частью счета матча (после двоеточия)
+                    # Самый надежный способ — проверить, что day_str идет ПЕРЕД названием месяца или в первой половине строки
+                    if day_str in words or f"0{day_str}" in words:
+                        # Убедимся, что это не ложное срабатывание счета в конце строки
+                        # Находим индекс слова с месяцем
+                        try:
+                            month_idx = -1
+                            for i, word in enumerate(words):
+                                if month_str in word:
+                                    month_idx = i
+                                    break
                             
-                            display_text = clean_text.replace(time_str, "").strip(" .,-—")
-                            
-                            # Сохраняем в список (время, текст), чтобы потом отсортировать
-                            raw_matches.append((time_uk_str, f"⏰ *{time_uk_str}* (UK) | ⚽ {display_text}"))
-                    except Exception:
-                        raw_matches.append(("23:59", f"⚽ {text}"))
+                            # Если нашли месяц, проверяем, что наше число стоит где-то рядом (обычно прямо перед ним)
+                            if month_idx != -1:
+                                # Ищем, есть ли число в пределах 2 слов от месяца
+                                start_search = max(0, month_idx - 2)
+                                end_search = min(len(words), month_idx + 2)
+                                sub_words = words[start_search:end_search]
+                                
+                                if day_str not in sub_words and f"0{day_str}" not in sub_words:
+                                    continue # Это был счет матча, пропускаем строку
+                        except Exception:
+                            pass
 
-        # Фильтруем дубликаты, сохраняя связь с временем
+                        # Если строка прошла валидацию даты — парсим время
+                        try:
+                            clean_text = " ".join(text.split())
+                            time_str = ""
+                            for word in clean_text.split():
+                                if ":" in word:
+                                    # Извлекаем чистое время ЧХ:ММ
+                                    time_str = "".join([c for c in word if c.isdigit() or c == ":"])
+                                    if ":" in time_str and len(time_str) >= 4:
+                                        time_str = time_str[:5]
+                                    break
+                            
+                            if time_str and len(time_str) == 5:
+                                ua_tz = pytz.timezone('Europe/Kyiv')
+                                parsed_time = datetime.strptime(time_str, "%H:%M").time()
+                                
+                                # Локализуем по Киеву и переводим в Лондон
+                                dt_ua = ua_tz.localize(datetime.combine(now_uk.date(), parsed_time))
+                                dt_uk = dt_ua.astimezone(uk_tz)
+                                time_uk_str = dt_uk.strftime("%H:%M")
+                                
+                                # Очищаем текст от даты и старого времени, оставляя только команды и счет
+                                display_text = clean_text
+                                if time_str in display_text:
+                                    display_text = display_text.replace(time_str, "")
+                                # Удаляем упоминание даты из строки матча, чтобы не дублировать
+                                if today_formatted in display_text:
+                                    display_text = display_text.replace(today_formatted, "")
+                                display_text = display_text.strip(" .,-—–:()")
+                                
+                                # Сохраняем (ключ_для_сортировки, готовая_строка)
+                                raw_matches.append((time_uk_str, f"⏰ *{time_uk_str}* | ⚽ {display_text}"))
+                        except Exception:
+                            raw_matches.append(("23:59", f"⚽ {text}"))
+
+        # Убираем дубликаты через словарь
         unique_matches = {}
         for time_key, match_text in raw_matches:
             unique_matches[match_text] = time_key
 
-        # СОРТИРОВКА: Матчи 00:00 и 01:00 теперь ГАРАНТИРОВАННО будут в самом начале списка
+        # СОРТИРОВКА: Сортируем ключи по времени (от 00:00 до 23:59)
+        # Матчи 00:00 теперь железно будут ПЕРВЫМИ в списке!
         sorted_matches = sorted(unique_matches.keys(), key=lambda x: unique_matches[x])
 
+        debug_info.append(f"✅ Найдено строк матчей: `{len(sorted_matches)}`")
+
         if sorted_matches:
-            return f"📅 *Расписание матчей на сегодня ({today_formatted}):*\n\n" + "\n".join(sorted_matches)
+            report = f"📅 *Расписание матчей на сегодня ({today_formatted}):*\n\n" + "\n".join(sorted_matches)
         else:
-            return f"📅 Сегодня (*{today_formatted}*) матчей ЧМ-2026 в расписании сайта не найдено."
+            report = f"📅 Сегодня (*{today_formatted}*) матчей не найдено."
+            
+        return "\n".join(debug_info) + "\n\n" + report
 
     except Exception as error_parse:
-        return f"❌ Ошибка парсера: {error_parse}"
-                            
+        return f"❌ Произошла ошибка при анализе сайта: {error_parse}"
+                                
