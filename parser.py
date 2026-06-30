@@ -17,10 +17,6 @@ async def get_london_matches():
     day_str = str(now_uk.day)
     month_str = MONTHS_RU[now_uk.month]
     today_formatted = f"{day_str} {month_str}"
-    
-    debug_info = []
-    debug_info.append(f"🤖 **Бот смотрит!:**")
-    debug_info.append(f"• Ищем дату: `{today_formatted}`")
 
     async with aiohttp.ClientSession() as session:
         try:
@@ -33,40 +29,36 @@ async def get_london_matches():
 
     try:
         soup = BeautifulSoup(html, 'html.parser')
-        elements = soup.find_all(['p', 'li', 'h2', 'h3', 'strong', 'td'])
+        # Ищем строго по тегам заголовков и абзацев, где обычно пишется дата дня
+        elements = soup.find_all(['h2', 'h3', 'p', 'strong', 'li'])
         
-        matches_today = []
-        is_today_section = False
-        found_date_header = False
+        raw_matches = []
+        is_today_section = False  
 
         for elem in elements:
             text = elem.get_text().strip()
-            if not text or len(text) > 250:
+            if not text or len(text) > 200:
                 continue
             
             text_lower = text.lower()
             
-            # Проверяем заголовок даты
-            has_month = month_str in text_lower
-            words = text_lower.split()
-            # Более гибкая проверка на точное совпадение дня (чтобы ловить "23", "23-е", "23.06")
-            has_exact_day = any(day_str == "".join(filter(str.isdigit, w)) for w in words)
+            # --- ПРОВЕРКА НА ЗАГОЛОВОК ДНЯ ---
+            # Строка даты должна быть короткой и НЕ должна содержать счёт или двоеточие времени
+            if month_str in text_lower and ":" not in text_lower and "–" not in text_lower and " - " not in text_lower:
+                words = [w.strip(".,()-—") for w in text_lower.split()]
+                
+                # Проверяем точное совпадение числа дня (например "30" или "030")
+                if day_str in words or f"0{day_str}" in words:
+                    if len(text) < 40:  # Чистый заголовок дня
+                        is_today_section = True
+                        continue
+                else:
+                    # Если нашли заголовок ДРУГОГО дня — закрываем сбор
+                    if is_today_section and len(text) < 40:
+                        is_today_section = False
+                        break 
 
-            if has_month and has_exact_day and not found_date_header:
-                if len(text) < 60 or "матч" in text_lower or "групп" in text_lower:
-                    is_today_section = True
-                    found_date_header = True
-                    debug_info.append(f"✅ НАЙДЕН заголовок дня: `{text}`")
-                    continue
-            
-            # Если мы уже в блоке сегодня, но встретили ДРУГУЮ дату — выходим
-            elif is_today_section and any(m in text_lower for m in MONTHS_RU.values()):
-                if not has_exact_day:
-                    debug_info.append(f"🛑 Вышли из блока на строке: `{text[:50]}...`")
-                    is_today_section = False
-                    break
-
-            # Собираем матчи
+            # --- СБОР МАТЧЕЙ ---
             if is_today_section:
                 if ":" in text_lower and ("–" in text_lower or "-" in text_lower or " против " in text_lower or " - " in text_lower):
                     try:
@@ -85,25 +77,25 @@ async def get_london_matches():
                             time_uk_str = dt_uk.strftime("%H:%M")
                             
                             display_text = clean_text.replace(time_str, "").strip(" .,-—")
-                            matches_today.append(f"⏰ *{time_uk_str}* | ⚽ {display_text}")
-                        else:
-                            matches_today.append(f"⚽ {clean_text}")
+                            
+                            # Сохраняем в список (время, текст), чтобы потом отсортировать
+                            raw_matches.append((time_uk_str, f"⏰ *{time_uk_str}* (UK) | ⚽ {display_text}"))
                     except Exception:
-                        matches_today.append(f"⚽ {text}")
+                        raw_matches.append(("23:59", f"⚽ {text}"))
 
-        if not found_date_header:
-            debug_info.append("❌ Парсер вообще не смог найти на странице блок с сегодняшней датой!")
+        # Фильтруем дубликаты, сохраняя связь с временем
+        unique_matches = {}
+        for time_key, match_text in raw_matches:
+            unique_matches[match_text] = time_key
 
-        matches_today = list(set(matches_today))
+        # СОРТИРОВКА: Матчи 00:00 и 01:00 теперь ГАРАНТИРОВАННО будут в самом начале списка
+        sorted_matches = sorted(unique_matches.keys(), key=lambda x: unique_matches[x])
 
-        # Собираем итоговый отчет
-        if matches_today:
-            report = f"📅 *Расписание матчей на сегодня ({today_formatted}):*\n\n" + "\n".join(matches_today)
+        if sorted_matches:
+            return f"📅 *Расписание матчей на сегодня ({today_formatted}):*\n\n" + "\n".join(sorted_matches)
         else:
-            report = f"📅 Сегодня (*{today_formatted}*) матчей не найдено."
-            
-        return "\n".join(debug_info) + "\n\n" + report
+            return f"📅 Сегодня (*{today_formatted}*) матчей ЧМ-2026 в расписании сайта не найдено."
 
     except Exception as error_parse:
-        return f"❌ Произошла ошибка при анализе сайта: {error_parse}"
-        
+        return f"❌ Ошибка парсера: {error_parse}"
+                            
